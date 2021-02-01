@@ -506,12 +506,17 @@ void Thread::set_priority(Thread* thread, ThreadPriority priority) {
 void Thread::start(Thread* thread) {
   // Start is different from resume in that its safety is guaranteed by context or
   // being called from a Java method synchronized on the Thread object.
+  // start和resume的区别在于，start方法的安全性是上下文或者Java代码中的Thread方法调用的
   if (!DisableStartThread) {
     if (thread->is_Java_thread()) {
       // Initialize the thread state to RUNNABLE before starting this thread.
       // Can not set it after the thread started because we do not know the
       // exact thread state at that time. It could be in MONITOR_WAIT or
       // in SLEEPING or some other state.
+      //
+      // 初始化线程状态为RUNNABLE。
+      // 如果先调用start_thread启动线程，那么线程的状态将由于无法预知而不能准确设置上。
+      // （有可能没有被成功获取到线程锁(MONITOR_WAIT)或者休眠(SLEEPING)或者其他状态）
       java_lang_Thread::set_thread_status(((JavaThread*)thread)->threadObj(),
                                           java_lang_Thread::RUNNABLE);
     }
@@ -1825,14 +1830,16 @@ static void sweeper_thread_entry(JavaThread* thread, TRAPS);
 
 JavaThread::JavaThread(ThreadFunction entry_point, size_t stack_sz) :
                        Thread() {
-  initialize();
+  initialize(); // JavaThread对象的参数初始化，不建议细看
   _jni_attach_state = _not_attaching_via_jni;
   set_entry_point(entry_point);
   // Create the native thread itself.
   // %note runtime_23
+  // 定义需要创建的线程为java_thread
   os::ThreadType thr_type = os::java_thread;
   thr_type = entry_point == &compiler_thread_entry ? os::compiler_thread :
                                                      os::java_thread;
+  // 调用线程创建接口
   os::create_thread(this, thr_type, stack_sz);
   // The _osthread may be NULL here because we ran out of memory (too many threads active).
   // We need to throw and OutOfMemoryError - however we cannot do this here because the caller
@@ -1844,6 +1851,17 @@ JavaThread::JavaThread(ThreadFunction entry_point, size_t stack_sz) :
   // by creator! Furthermore, the thread must also explicitly be added to the Threads list
   // by calling Threads:add. The reason why this is not done here, is because the thread
   // object must be fully initialized (take a look at JVM_Start)
+  // 以下内容主要自官方注释：
+  // 当操作系统没有可分配的内存的时候，_osthread有可能返回NULL。
+  // 但是此时我们又不能抛出OOM Error，因为调用方此时可能持有了一把锁（参见上方的mu(Threads_lock)），
+  // 这些锁必须在抛出异常前释放掉。如果我们需要抛出的异常，就需要为这个Exception对象申请内存，并初始化异常对象，
+  // 此时可能已经没有足够内存了，这种行为就有可能锁回收失败。
+  //
+  // 因此建议JVM先释放所有的锁，然后Java代码中如果发现线程申请失败的话，自己抛出异常(也可以触发OOM Error)。
+  // （译者注: 然而好像目前主要的Java发行版，都没有针对这种场景抛出异常）
+  //
+  // 代码运行到这里的时候，线程依然保持挂起的状态。该线程必须由创建者(JVM)执行运行(start)动作。
+  // 此外，线程的创建者(JVM)需要调用Threads:add用于将创建之后的线程放入线程队列中，本处代码没有添加是因为每一个线程对象必须完全创建(而此处可能会创建失败)
 }
 
 JavaThread::~JavaThread() {
@@ -3208,6 +3226,10 @@ void JavaThread::prepare(jobject jni_thread, ThreadPriority prio) {
   // Set the thread field (a JavaThread *) of the
   // oop representing the java_lang_Thread to the new thread (a JavaThread *).
 
+  // 使用Handle来绑定Java的Thread对象和C++的Thread
+
+  // 使用JNIHandles从jni线程中获取C++的线程对象，并将其放入一个新的Handle封装类的变量thread_oop中。
+  // 这个Handle主要用于共享该C++线程对象。
   Handle thread_oop(Thread::current(),
                     JNIHandles::resolve_non_null(jni_thread));
   assert(InstanceKlass::cast(thread_oop->klass())->is_linked(),
@@ -3221,6 +3243,7 @@ void JavaThread::prepare(jobject jni_thread, ThreadPriority prio) {
   }
 
   // Push the Java priority down to the native thread; needs Threads_lock
+  // 将线程的优先级设置成 Java中优先级 映射之后的 实际操作系统的线程优先级
   Thread::set_priority(this, prio);
 
   // Add the new thread to the Threads list and set it in motion.
@@ -3228,6 +3251,11 @@ void JavaThread::prepare(jobject jni_thread, ThreadPriority prio) {
   // It is crucial that we do not block before the thread is
   // added to the Threads list for if a GC happens, then the java_thread oop
   // will not be visited by GC.
+  //
+  // 将线程加入线程队列中，并且该线程进行激活。
+  // 调用Threads::add时需要持有该线程的锁。
+  // 至关重要的一点是，在我们线程加入线程队列动作执行挖成之后，我们需要释放该线程的锁
+  // （也即JVM不会主动阻塞该线程），以防止GC无法回收该线程的内存。
   Threads::add(this);
 }
 

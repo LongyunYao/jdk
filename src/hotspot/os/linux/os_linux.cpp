@@ -872,25 +872,30 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
   assert(thread->osthread() == NULL, "caller responsible");
 
   // Allocate the OSThread object
-  OSThread* osthread = new OSThread(NULL, NULL);
+  // 创建一个OSThread对象
+  OSThread* osthread = new OSThread(NULL, NULL); // 调用pd_initialize()接口并初始化两个入参
   if (osthread == NULL) {
     return false;
   }
 
   // set the correct thread state
+  // 设置线程类型(就是上方传入的java_thread)
   osthread->set_thread_type(thr_type);
 
   // Initial state is ALLOCATED but not INITIALIZED
+  // 设置当前线程状态为已分配(ALLOCATED)，但是还未初始化(INITIALIZED)
   osthread->set_state(ALLOCATED);
 
   thread->set_osthread(osthread);
 
   // init thread attributes
+  // 调用pthread库初始化线程属性
   pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
   // Calculate stack size if it's not specified by caller.
+  // 申请req_stack_size大小的线程。
   size_t stack_size = os::Posix::get_initial_stack_size(thr_type, req_stack_size);
   // In glibc versions prior to 2.7 the guard size mechanism
   // is not implemented properly. The posix standard requires adding
@@ -899,19 +904,29 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
   // stack_size by the size of the guard pages to mimick proper
   // behaviour. However, be careful not to end up with a size
   // of zero due to overflow. Don't add the guard page in that case.
+  //
+  // 在2.7和之前的glibc版本中，guard size的计算机制没有正确实现。
+  // posix标准要求线程的栈空间中包含将guard pages的诉求，而Linux创建线程的时候，线程栈大小(stacksize)并没有包含guard pages的诉求。
+  // 因此，JVM通过手工计算保护页面的大小来调整请求的stack_size，以模仿适当的行为。
+  // 但是，请注意最终计算出来的栈大小不要以0结尾，否则可能会出现栈溢出(overflow)。 在这种情况下，请勿不要添加guard pages的诉求。
   size_t guard_size = os::Linux::default_guard_size(thr_type);
   // Configure glibc guard page. Must happen before calling
   // get_static_tls_area_size(), which uses the guard_size.
+  //
+  // 设置glibc库中的guard page属性。
+  // 由于get_static_tls_area_size()需要读取guard page属性，因此该方法必须在get_static_tls_area_size()之前调用。
   pthread_attr_setguardsize(&attr, guard_size);
 
   size_t stack_adjust_size = 0;
   if (AdjustStackSizeForTLS) {
     // Adjust the stack_size for on-stack TLS - see get_static_tls_area_size().
+    // 为线程本地存储(Thread Local Storage, TLS)预留资源，参见get_static_tls_area_size().
     stack_adjust_size += get_static_tls_area_size(&attr);
   } else {
     stack_adjust_size += guard_size;
   }
 
+  // 根据操作系统的分页大小，让栈的诉求向上对齐
   stack_adjust_size = align_up(stack_adjust_size, os::vm_page_size());
   if (stack_size <= SIZE_MAX - stack_adjust_size) {
     stack_size += stack_adjust_size;
@@ -925,6 +940,7 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
 
   {
     pthread_t tid;
+    // 调用pthread_create创建线程，同时获取线程创建结果(0成功，其余失败)
     int ret = pthread_create(&tid, &attr, (void* (*)(void*)) thread_native_entry, thread);
 
     char buf[64];
@@ -947,15 +963,18 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
 
     if (ret != 0) {
       // Need to clean up stuff we've allocated so far
+      // 如果创建失败，则释放osthread申请的内存空间
       thread->set_osthread(NULL);
       delete osthread;
       return false;
     }
 
     // Store pthread info into the OSThread
+    // 将创建完成的操作系统线程id缓存到osthread对象中
     osthread->set_pthread_id(tid);
 
     // Wait until child thread is either initialized or aborted
+    // 如果自己的子线程还在初始化完成(处于ALLOCATED但是没有到INITIALIZED)
     {
       Monitor* sync_with_child = osthread->startThread_lock();
       MutexLocker ml(sync_with_child, Mutex::_no_safepoint_check_flag);
@@ -966,6 +985,7 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
   }
 
   // Aborted due to thread limit being reached
+  // 如果当前线程已经是一个僵尸进程(ZOMBIE)，则手工释放osthread申请的内存空间
   if (state == ZOMBIE) {
     thread->set_osthread(NULL);
     delete osthread;
@@ -974,6 +994,7 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
 
   // The thread is returned suspended (in state INITIALIZED),
   // and is started higher up in the call chain
+  // 线程创建完成，状态为INITIALIZED
   assert(state == INITIALIZED, "race condition");
   return true;
 }
@@ -1053,6 +1074,7 @@ void os::pd_start_thread(Thread* thread) {
   assert(osthread->get_state() != INITIALIZED, "just checking");
   Monitor* sync_with_child = osthread->startThread_lock();
   MutexLocker ml(sync_with_child, Mutex::_no_safepoint_check_flag);
+  // 尝试唤起该osthread
   sync_with_child->notify();
 }
 

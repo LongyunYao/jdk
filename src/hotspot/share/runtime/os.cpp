@@ -876,6 +876,7 @@ void os::start_thread(Thread* thread) {
   // guard suspend/resume
   MutexLocker ml(thread->SR_lock(), Mutex::_no_safepoint_check_flag);
   OSThread* osthread = thread->osthread();
+  // 将操作系统的线程的状态设置成RUNNABLE
   osthread->set_state(RUNNABLE);
   pd_start_thread(thread);
 }

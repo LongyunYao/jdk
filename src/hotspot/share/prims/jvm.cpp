@@ -3014,13 +3014,16 @@ JVM_ENTRY(void, JVM_StartThread(JNIEnv* env, jobject jthread))
   // We cannot hold the Threads_lock when we throw an exception,
   // due to rank ordering issues. Example:  we might need to grab the
   // Heap_lock while we construct the exception.
+  // 线程操作的锁获取标记
   bool throw_illegal_thread_state = false;
 
   // We must release the Threads_lock before we can post a jvmti event
   // in Thread::start.
+  // 线程对象的空间申请代码块
   {
     // Ensure that the C++ Thread and OSThread structures aren't freed before
     // we operate.
+    // 尝试获取锁
     MutexLocker mu(Threads_lock);
 
     // Since JDK 5 the java.lang.Thread threadStatus is used to prevent
@@ -3029,11 +3032,13 @@ JVM_ENTRY(void, JVM_StartThread(JNIEnv* env, jobject jthread))
     // there is a small window between the Thread object being created
     // (with its JavaThread set) and the update to its threadStatus, so we
     // have to check for this
+    // 保证线程由于Thread.state为后期(Java 1.5)引入，因此需要确定state非null，防止查询Thread.state时出现空指针异常
     if (java_lang_Thread::thread(JNIHandles::resolve_non_null(jthread)) != NULL) {
       throw_illegal_thread_state = true;
     } else {
       // We could also check the stillborn flag to see if this thread was already stopped, but
       // for historical reasons we let the thread detect that itself when it starts running
+      // 计算线程的栈空间
 
       jlong size =
              java_lang_Thread::stackSize(JNIHandles::resolve_non_null(jthread));
@@ -3042,6 +3047,7 @@ JVM_ENTRY(void, JVM_StartThread(JNIEnv* env, jobject jthread))
       // size_t (an unsigned type), which may be 32 or 64-bit depending on the platform.
       //  - Avoid truncating on 32-bit platforms if size is greater than UINT_MAX.
       //  - Avoid passing negative values which would result in really large stacks.
+      // 为native_thread申请内存空间（申请32位还是64位视操作系统决定，所以是使用size_t防止爆int）
       NOT_LP64(if (size > SIZE_MAX) size = SIZE_MAX;)
       size_t sz = size > 0 ? (size_t) size : 0;
       native_thread = new JavaThread(&thread_entry, sz);
@@ -3052,21 +3058,26 @@ JVM_ENTRY(void, JVM_StartThread(JNIEnv* env, jobject jthread))
       // that we only grab the lock if the thread was created successfully -
       // then we can also do this check and throw the exception in the
       // JavaThread constructor.
+      // 防止操作系统因为内存不足而导致native_thread创建失败
       if (native_thread->osthread() != NULL) {
         // Note: the current thread is not being used within "prepare".
+        // 标记当前线程的状态为prepare
         native_thread->prepare(jthread);
       }
     }
   }
 
+  // 检查JNI传入的线程对象的状态，如果为空，就抛出异常
   if (throw_illegal_thread_state) {
     THROW(vmSymbols::java_lang_IllegalThreadStateException());
   }
 
+  // 断言native_thread已经成功分配到对象空间
   assert(native_thread != NULL, "Starting null thread?");
 
   if (native_thread->osthread() == NULL) {
     // No one should hold a reference to the 'native_thread'.
+    // 如果native_thread对象空间中，没有实际申请到OS线程，进行异常处理并且抛出异常
     native_thread->smr_delete();
     if (JvmtiExport::should_post_resource_exhausted()) {
       JvmtiExport::post_resource_exhausted(
@@ -3077,6 +3088,7 @@ JVM_ENTRY(void, JVM_StartThread(JNIEnv* env, jobject jthread))
               os::native_thread_creation_failed_msg());
   }
 
+// 如果有加载Java Flight Recorder工具，针对JFR做特殊处理
 #if INCLUDE_JFR
   if (Jfr::is_recording() && EventThreadStart::is_enabled() &&
       EventThreadStart::is_stacktrace_enabled()) {
@@ -3086,6 +3098,7 @@ JVM_ENTRY(void, JVM_StartThread(JNIEnv* env, jobject jthread))
   }
 #endif
 
+  // 调用Thread::start方法开始进行线程操作
   Thread::start(native_thread);
 
 JVM_END
