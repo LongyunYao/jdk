@@ -231,6 +231,9 @@ template <MEMFLAGS F> class CHeapObj ALLOCATION_SUPER_CLASS_SPEC {
 
 // Base class for objects allocated on the stack only.
 // Calling new or delete will result in fatal error.
+// 所有栈空间分配对象的基类Class
+// 禁止使用C++默认的new和 new[]创建堆对象，如果尝试创建，将会抛出异常。
+// 同时所有new和delete都被私有化了，禁止访问。
 
 class StackObj ALLOCATION_SUPER_CLASS_SPEC {
  private:
@@ -241,12 +244,15 @@ class StackObj ALLOCATION_SUPER_CLASS_SPEC {
 };
 
 // Base class for objects stored in Metaspace.
+// 所有元空间(Matespace)存放对象的基类
 // Calling delete will result in fatal error.
+// 这些对象禁止调用delete方法。
 //
 // Do not inherit from something with a vptr because this class does
 // not introduce one.  This class is used to allocate both shared read-only
 // and shared read-write classes.
-//
+// 由于该类实际上不需要任何虚函数，因此该类也禁止从任何含有虚函数指针(vptr)的类派生出该类。
+// 这个类通常用来分配那些只读类或者读写类。
 
 class ClassLoaderData;
 class MetaspaceClosure;
@@ -345,6 +351,7 @@ class MetaspaceObj {
 };
 
 // Base class for classes that constitute name spaces.
+// 命名空间类的基类
 
 class Arena;
 
@@ -370,6 +377,16 @@ extern void resource_free_bytes( char *old, size_t size );
 // ResourceObj's can be allocated within other objects, but don't use
 // new or delete (allocation_type is unknown).  If new is used to allocate,
 // use delete to deallocate.
+//----------------------------------------------------------------------
+// 默认情况下，资源区(resource area)所分配对象的基类。
+// 有一些不强制规定的建议是，这些被创建的对象有可能是在C语言的再某个方法中
+// 通过new(ResourceObj::C_HEAP)在堆中进行创建。
+//
+// 或者在其它的对象中，通过直接给ResourceObj的指针申请地址。
+// 同时不要使用new或者delete关键字。
+//
+// 如果使用new创建的对象，则一定要使用成对操作delete进行释放。
+
 class ResourceObj ALLOCATION_SUPER_CLASS_SPEC {
  public:
   enum allocation_type { STACK_OR_EMBEDDED = 0, RESOURCE_AREA, C_HEAP, ARENA, allocation_mask = 0x3 };
@@ -380,6 +397,12 @@ class ResourceObj ALLOCATION_SUPER_CLASS_SPEC {
   // called but garbage on stack may look like a valid allocation_type.
   // Store negated 'this' pointer when new() is called to distinguish cases.
   // Use second array's element for verification value to distinguish garbage.
+
+  // 如果使用new关键字创建对象，那么这个对象将会被在堆上创建，而不是在栈上被定义。
+  // 使用数组在栈上分配的内存，在其需要收回的时候，这些栈上的垃圾对象看上去像是有效的distribution_type
+  //
+  // 为了显性区分这两种场景，如果使用new进行内存分配时，this指针应该指向一个空指针（让外部通过数组访问？）
+  // 另外显性区分哪些对象是可以被回收的垃圾，我们需要定义一个辅助数组
   uintptr_t _allocation_t[2];
   bool is_type_set() const;
   void initialize_allocation_info();
