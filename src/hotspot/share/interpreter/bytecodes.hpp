@@ -29,6 +29,8 @@
 
 // Bytecodes specifies all bytecodes used in the VM and
 // provides utility functions to get bytecode attributes.
+//
+// Bytecodes类用于所有VM中使用到的字节码，它对外提供了这些字节码实际使用的方法。
 
 class Method;
 
