@@ -272,12 +272,18 @@ void Bytecodes::initialize() {
   // initialize bytecode tables - didn't use static array initializers
   // (such as {}) so we can do additional consistency checks and init-
   // code is independent of actual bytecode numbering.
+  // bytecode检索表的初始化——不要使用金泰数组的形式初始化表（比如{}），
+  // 这样我们就能够做一些附加的一致性校验，
+  // 此外这里的初始化编码和实际使用的字节码的编码不一定完全符合。
   //
   // Note 1: NULL for the format string means the bytecode doesn't exist
   //         in that form.
+  // 注1：format参数列对应的字符串，如果是NULL，则表示这个字节码在这个表单中不存在
+  //     （因此如果没有格式要求，也不要使用NULL，而应该使用空字符串）
   //
   // Note 2: The result type is T_ILLEGAL for bytecodes where the top of stack
   //         type after execution is not only determined by the bytecode itself.
+  // 注2：那些result tp列是T_ILLEGAL的字节码，表示其指令执行完成之后，栈顶（也即指令的操作结果）的类型是不确定的（泛型）。
 
   //  Java bytecodes
   //  bytecode               bytecode name           format   wide f.   result tp  stk traps
