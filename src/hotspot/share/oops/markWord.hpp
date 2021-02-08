@@ -34,7 +34,7 @@
 // markWord描述了一个对象的头部信息。
 //
 // Bit-format of an object header (most significant first, big endian layout below):
-// 下方为一个对象头的占位表（按照高有效位在前，大段在前）
+// 下方为一个对象头的占位表（按照高有效位在前，大端在前）
 //
 //  32 bits:
 //  --------
@@ -64,7 +64,7 @@
 //    When a lock's bias is revoked, it reverts back to the normal
 //    locking scheme described below.
 //  - 偏向锁模式被用于让一把锁偏向与一个给定的线程。（yunyao: 这里的偏向锁模式其实是基于JavaThread + markWord最后三位共同配合组成的）
-//    当这个模式被设置为低三位时，这把锁要么是偏向于一个给定的线程的，要么是匿名偏向它。
+//    当低三位比特位被设置成偏向锁模式的时候，这把锁要么是偏向于一个给定的线程的，要么是匿名偏向那个给定的线程。
 //    （yunyao: 这里涉及到偏向锁的三个不同状态：①匿名偏向(Anonymously biased)：表示这个对象有可能是一个偏向锁，
 //    通常第一个获取该锁的线程进入后，锁处于该状态；②可重偏向(Rebiasable)：表示上一个线程已经释放锁之后，该对象被下一个锁尝试获取，
 //    此场景下锁处于该状态，通常使用原子CAS指令将锁对象绑定给诉求线程；③已偏向(Biased)：表示该锁已经偏向某一个线程，该线程已经持有该锁）
@@ -77,7 +77,7 @@
 //    unlocked object.
 //    注意，我们在这里重载了对象头中"unlocked"的意义。
 //    由于我们从mark word的age中偷了一位（用于标记这个对象是否被锁定），
-//    因此我们可以保证被解锁对象将永远也不会发现偏向锁模式。
+//    使用从age位中偷取的最低一位比特位，我们就能保证这偏向锁模式不会真正的释放锁对象。
 //
 //    Note also that the biased state contains the age bits normally
 //    contained in the object header. Large increases in scavenge
@@ -96,17 +96,16 @@
 //    运行时系统将所有JavaThread*指针按照一个统一的较大的值进行对齐（32位系统中按照128字节进行对齐，
 //    64位系统中按照256字节进行对齐），以保证age位和epoch位能够流出足够的空间（用于支持偏向锁）。
 //
-//    注意小标是对齐之后的结果，不是mark word
 //    [JavaThread* | epoch | age | 1 | 01]       lock is biased toward given thread
 //                                               当锁偏向目标线程的时候（biased_lock为1）
 //    [0           | epoch | age | 1 | 01]       lock is anonymously biased
 //                                               当锁匿名偏向线程的时候（biased_lock为1）
 //
 //  - the two lock bits are used to describe three states: locked/unlocked and monitor.
-//  - 最后两比特用于表示表示三种状态：加锁/解锁以及监视（锁）
+//  - 最后两比特用于表示表示三种状态：加锁/解锁以及监控锁
 //
 //    [ptr             | 00]  locked             ptr points to real header on stack
-//                                               ptr指向栈首（yunyao: 因为栈首存放这锁对象？）
+//                                               ptr指向栈首（yunyao: 因为栈顶存放这锁对象？）
 //                                               国内很多人也习惯将该状态称为轻量级锁
 //    [header      | 0 | 01]  unlocked           regular object header
 //                                               标准对象头(object header)
@@ -361,7 +360,7 @@ class markWord {
   }
   // it is only used to be stored into BasicLock as the
   // indicator that the lock is using heavyweight monitor
-  // 这个方法只有BasicLock会调用，因为它标记着这个锁使用了重量级监视器
+  // 这个方法只有BasicLock会调用，因为它标记着这个锁使用了重量级监控器
   static markWord unused_mark() {
     return markWord(marked_value);
   }
