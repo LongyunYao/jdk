@@ -34,12 +34,28 @@
 // locking mechanisms. The principal difference is in the handling of
 // recursive locking which is how this technique achieves a more
 // efficient fast path than these other schemes.
+// 这个类描述了一种免内存的偏向锁（Store-Free Biased Locking）实现方式。
+// 这个方案的顶层方案和IBM的所保留(yunyao: 找不到相关资料)、
+// Dice-Moir-Scherer QR锁（yunyao: 这里应该专门指代 David Dice, Mark Moir, William Scherer
+// 三人合著的paper —— Quickly Reacquirable Locks）
+// 和其他的有偏向的锁机制。
+// 本处实现的主要区别在于处理递归锁定的时候，biasedLocking使用了一个比其他技术更有效的方案。
+// yunyao:"fast path"和"slow path"是同步过程中的两种工作方式：
+// ①"fast path"通常是通过两个JIT编译器和一个解释器来实现。JIT(just-in-time)包含一个
+// client编译器"C1"和一个server编译器"C2"，C2性能优于C1；
+// ②"slow path"通常是值用C++代码实现的方式。
+// 这两种同步工作方式似乎没有找到一个规范的翻译，索性下文将直接采用原文中的单词作为专有名词。
+// 参见：
+// https://blogs.oracle.com/dave/lets-say-youre-interested-in-using-hotspot-as-a-vehicle-for-synchronization-research
 //
 // The basic observation is that in HotSpot's current fast locking
 // scheme, recursive locking (in the fast path) causes no update to
 // the object header. The recursion is described simply by stack
 // records containing a specific value (NULL). Only the last unlock by
 // a given thread causes an update to the object header.
+// 通常来说，在HotSpot当前的快速锁定方案中，递归锁定（通过"fast path"方式）
+// 不会导致object header更新。而是通过在栈记录中包含一个特定的值(NULL)来表示递归锁定。
+// 只有在给定线程最后一次执行解锁行为之后，object header才会被真正的更新。
 //
 // This observation, coupled with the fact that HotSpot only compiles
 // methods for which monitor matching is obeyed (and which therefore
@@ -49,6 +65,10 @@
 // checks and throwing of IllegalMonitorStateException in the
 // interpreter with little or no impact on the performance of the fast
 // path.
+// 上述方案，结合HotSpot只仅仅编译那些要遵循监控匹配的函数（因此不能抛出IllegalMonitorStateException）
+// 的特性，让我们在编译完成的代码中使用递归锁定的时候可以完全消除对object header的修改。
+// 同时(使用该方案)在几乎不影响"fast path"方案的基础上，表现上也和循环检查+解释器抛出
+// IllegalMonitorStateException的表现差不多
 //
 // The basic algorithm is as follows (note, see below for more details
 // and information). A pattern in the low three bits is reserved in
@@ -60,6 +80,13 @@
 // first thread which locks an anonymously biased object biases the
 // lock toward that thread. If another thread subsequently attempts to
 // lock the same object, the bias is revoked.
+// 基本算法如下（注意，更多详细信息请参见下文）。
+// object header的低三位比特位预留出来，用于指示当前给定的对象的锁的偏向动作
+// 是已经偏向完成还是说所有线程都可以被偏向。
+// 如果偏向模式开启，object header的剩余内容是被偏向的线程指针(JavaThread*)
+// 或者NULL，表示当前锁已经处于“匿名偏向”状态。
+// 已经匿名偏向的锁对象所偏向的线程会首先锁住这个锁对象。
+// 如果其他线程在偏向锁定之后也尝试锁定这个锁对象，那么这个锁的偏向动作就会被取消。
 //
 // Because there are no updates to the object header at all during
 // recursive locking while the lock is biased, the biased lock entry
@@ -72,6 +99,12 @@
 // performed on these locks. We optimistically expect the biased lock
 // entry to hit most of the time, and want the CAS-based fallthrough
 // to occur quickly in the situations where the bias has been revoked.
+// 由于在递归锁定的时候，我们没有刷新object header，所以偏向锁的入口代码其实知识对
+// object header值的校验。如果校验成功，则线程可以持有这把锁。如果测试失败，则需要
+// 检查bias位(倒数第三位)是否还是1。如果不是1（也即没有被锁定），我们将回退到HotSpot
+// 原本基于CAS的锁定方案。如果已经被置为1，我们就需要将锁通过CAS操作转移偏向对象
+// 至当前线程。接下来就希望尽可能少在这些锁上进行操作。我们乐观的希望偏向锁在进入时，
+// 大多数都可以被迷宫中，同时也希望在偏见取消回退的时候，基于CAS的锁机制能够迅速相应。
 //
 // Revocation of the lock's bias is fairly straightforward. We want to
 // restore the object's header and stack-based BasicObjectLocks and
@@ -87,6 +120,17 @@
 // Alternatively, we can revoke the bias of an object inside a safepoint
 // if we are already in one and we detect that we need to perform a
 // revocation.
+// 取消锁的偏见非常简单。
+// 取消锁的时候，我们希望将 ①对象的object header、
+// ②基于栈的 BasicObjectLocks 和 ③BasicLocks 这三个对象到对象
+// 被HotSpot经常快速锁定方案的状态。
+// 为了达到这个目的，我们增加了一个(JVM)与使用偏向锁的JavaThread之间的握手步骤。
+// 握手过程中我们遍历偏向器的栈，寻找所有与这个对象相关的锁定记录，尤其是第一个(也称“最高”）
+// 的记录。我们在最高的锁定记录中填充这个对象需要被置换掉的object header（这是一个众所周知的值，
+// 因为当对象在偏向锁定状态的时候，我们并不关心这个对象的identity的hash值，也不关心age的比特位）
+// 并且其他所有锁定记录都置成0（0也意味着这将是递归锁）。
+// 或者，如果我们当前处于safepoint并且我们已经检测到需要进行撤销的时候，我们可以取消safepoint内
+// 对象的偏向动作。（yunyao: safepoint专指HotSpot中JVM需要STW(Stop The World)的位置）
 //
 // This scheme can not handle transfers of biases of single objects
 // from thread to thread efficiently, but it can handle bulk transfers
@@ -106,6 +150,17 @@
 // the instance's bias pattern differs from the prototype header's and
 // causes the bias to be revoked without reaching a safepoint or,
 // again, a bulk heap sweep.
+// 该方案不能高效的处理单个对象在多个线程之间的偏向传递，但是它可以处理这些偏向的批量传递，
+// 这是一种在应用程序和基准测试中常见的模式。在每种数据类型的基础上，我们使用“偏向时间”
+// 实现了“批量重偏向”和“批量撤销”操作“。
+// 如果一种特定的数据类型发生过多的偏向撤销，这个数据类型的偏向时间将会在safepoint时递增。
+// "fast path"锁定方式会检查object header是否存在无效的”偏向时间“。如果存在，则会尝试
+// 使用CAS操作让这个对象进行重偏向操作，从而避免出现safepoints或者批量的堆扫描（后者在该
+// 算法的较早版本中使用，并且伸缩性不好）。 如果仍然存在过多的偏向撤销，则通过将原始的header
+// 重置成无偏向的markWord的方式来完全禁用这个数据类型的偏向。
+// "fast-path"锁定的代码检查当前示例的偏向模式是否和原始的object header中的偏向信息有
+// 不同，（如果有不同）并同时触发偏向取消（即时还没有到达safepoint），或这让JVM继续进行
+// 批量堆清除。
 
 // Biased locking counters
 class BiasedLockingCounters {
@@ -181,22 +236,28 @@ public:
   // This initialization routine should only be called once and
   // schedules a PeriodicTask to turn on biased locking a few seconds
   // into the VM run to avoid startup time regressions
+  // 这个方法只能被调用一次，调用成功之后，会调度一个PeriodicTask在VM内运行几秒钟，
+  // 以此防止启动时间退化。
   static void init();
 
   // This provides a global switch for leaving biased locking disabled
   // for the first part of a run and enabling it later
+  // 提供了一个全局开关， 可以在运行的第一部分禁用偏置锁定，然后在其他地方重新启用它
   static bool enabled();
 
   // This should be called by JavaThreads to revoke the bias of an object
+  // JavaThreads应该调用它来撤销某个对象的偏向
   static void revoke(Handle obj, TRAPS);
 
   // This must only be called by a JavaThread to revoke the bias of an owned object.
+  // 只能由JavaThread调用以的函数，用于取消其拥有的对象的偏向锁定
   static void revoke_own_lock(Handle obj, TRAPS);
 
   static void revoke_at_safepoint(Handle obj);
 
   // These are used by deoptimization to ensure that monitors on the stack
   // can be migrated
+  // 通过去优化保证栈上的监控器可以迁移
   static void revoke(GrowableArray<Handle>* objs, JavaThread *biaser);
 
   static void print_counters() { _counters.print(); }
@@ -205,6 +266,7 @@ public:
   // These routines are GC-related and should not be called by end
   // users. GCs which do not do preservation of mark words do not need
   // to call these routines.
+  // 这些例程与GC有关，不应由最终用户调用。不保留标记词的GC无需调用这些例程。
   static void preserve_marks();
   static void restore_marks();
 };
