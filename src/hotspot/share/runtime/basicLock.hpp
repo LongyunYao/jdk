@@ -52,13 +52,18 @@ class BasicLock {
 };
 
 // A BasicObjectLock associates a specific Java object with a BasicLock.
+// BasicObjectLock将特定的Java对象和BasicLock及逆行关联。
 // It is currently embedded in an interpreter frame.
+// 目前这个类被用于解释器框架中。
 
 // Because some machines have alignment restrictions on the control stack,
 // the actual space allocated by the interpreter may include padding words
 // after the end of the BasicObjectLock.  Also, in order to guarantee
 // alignment of the embedded BasicLock objects on such machines, we
 // put the embedded BasicLock at the beginning of the struct.
+// 由于某些计算机在控制栈上有对齐限制，因此解释器分配的实际空间可能会在
+// BasicObjectLock末尾包含填充字。此外，为了保证在这些计算机上对齐嵌入式BasicLock对象，
+// 我们将嵌入式BasicLock放在结构的开头。
 
 class BasicObjectLock {
   friend class VMStructs;
