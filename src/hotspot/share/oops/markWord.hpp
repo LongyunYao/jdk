@@ -211,7 +211,7 @@ class markWord {
   // fixes up biased locks to be compatible with it when a bias is
   // revoked.
   // 检查当前对象的markWord中的信息是否标记当前对象是否是偏向锁。
-  // 对于那些在ObjectSynchronizer和其他代码中中调用这些方法的代码，每次使用这些放法时，必须要做返回值检查。
+  // 对于那些在ObjectSynchronizer和其他代码中中调用这些方法的代码，每次使用这些放法方法时，必须要做返回值检查。
   // 那些CAS的锁代码并无需关注偏向的实现，尽管这些代码会在运行时会修正偏向锁——这种修正的目的是为了保持运行时能够保持兼容。
   bool has_bias_pattern() const {
     return (mask_bits(value(), biased_lock_mask_in_place) == biased_lock_pattern);

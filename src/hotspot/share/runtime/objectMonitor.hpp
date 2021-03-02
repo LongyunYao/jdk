@@ -63,11 +63,15 @@ class ObjectWaiter : public StackObj {
 // JavaMonitor. The lightweight BasicLock/stack lock version has been
 // inflated into an ObjectMonitor. This inflation is typically due to
 // contention or use of Object.wait().
+// ObjectMonitor类实现了JavaMonitor的重量级版本。轻量级的 BasicLock/栈锁定版本 已经
+// 膨胀成为ObjectMonitor。这种锁的膨胀，通常是由于竞争或者使用Object.wait()所造成的。
 //
 // WARNING: This is a very sensitive and fragile class. DO NOT make any
 // changes unless you are fully aware of the underlying semantics.
+// 这是一个非常敏感且脆弱的类。除非完全了解底层语义，否则请不要进行任何修改。
 //
 // ObjectMonitor Layout Overview/Highlights/Restrictions:
+// ObjectMonitor的参数概览、要点以及限制：
 //
 // - The _header field must be at offset 0 because the displaced header
 //   from markWord is stored there. We do not want markWord.hpp to include
@@ -75,10 +79,17 @@ class ObjectWaiter : public StackObj {
 //   means that ObjectMonitor cannot inherit from any other class nor can
 //   it use any virtual member functions. This restriction is critical to
 //   the proper functioning of the VM.
+//   _header字段必须在类的内存空间的开始位置（偏移量为0的位置），因为从markWord移出来的
+//   header被存放在这里。我们不希望markWord.hpp中包含ObjectMonitor.hpp，以此避免在
+//   任何地方公开ObjectMonitor。这就意味着ObjectMonitor不能和其他任何类产生直接关系，
+//   也不能被任何虚函数使用。这个限制对于VM的正常运行至关重要。
 // - The _header and _owner fields should be separated by enough space
 //   to avoid false sharing due to parallel access by different threads.
 //   This is an advisory recommendation.
+//   _header和_owner字段应该间隔足够的内存空间，以此避免由于不同的线程并行访问导致错误的共享。
+//   这是一个建议。
 // - The general layout of the fields in ObjectMonitor is:
+//   ObjectMonitor中字段的一般布局为如下：
 //     _header
 //     <lightly_used_fields>
 //     <optional padding>
@@ -87,9 +98,12 @@ class ObjectWaiter : public StackObj {
 // - The VM assumes write ordering and machine word alignment with
 //   respect to the _owner field and the <remaining_fields> that can
 //   be read in parallel by other threads.
+//   VM假设对_owner字段和字段进行写排序和机器字对齐，这些字段可以被其他线程并行读取。
 // - Generally fields that are accessed closely together in time should
 //   be placed proximally in space to promote data cache locality. That
 //   is, temporal locality should condition spatial locality.
+//   通常，应将在时间上紧密接近的字段放在空间的近端，以提高数据缓存的局部性。
+//   也就是说，时间局部性（temporal locality）应以空间局部性（spatial locality）为条件。
 // - We have to balance avoiding false sharing with excessive invalidation
 //   from coherence traffic. As such, we try to cluster fields that tend
 //   to be _written_ at approximately the same time onto the same data

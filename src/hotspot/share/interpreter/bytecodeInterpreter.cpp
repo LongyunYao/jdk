@@ -282,6 +282,7 @@
 #endif /* USELABELS */
 
 // About to call a new method, update the save the adjusted pc and return to frame manager
+// bcp: bytecode pointer，指向当前字节码在内存里的地址
 #define UPDATE_PC_AND_RETURN(opsize)  \
    DECACHE_TOS();                     \
    istate->set_bcp(pc+opsize);        \
@@ -595,6 +596,7 @@ BytecodeInterpreter::run(interpreterState istate) {
 
 #ifdef ASSERT
   // this will trigger a VERIFY_OOP on entry
+  // 进入中断的时候会触发VERIFY_OOP
   if (istate->msg() != initialize && ! METHOD->is_static()) {
     oop rcvr = LOCALS_OBJECT(0);
     VERIFY_OOP(rcvr);
@@ -1772,30 +1774,44 @@ run:
       }
 
       /* monitorenter and monitorexit for locking/unlocking an object */
+      /* monitorenter 和 monitorexit 指令，用于对一个对象执行 加锁 / 解锁 动作 */
 
       CASE(_monitorenter): {
+        // 取出栈顶需要被锁住的对象
         oop lockee = STACK_OBJECT(-1);
         // derefing's lockee ought to provoke implicit null check
         CHECK_NULL(lockee);
         // find a free monitor or one already allocated for this object
         // if we find a matching object then we need a new monitor
         // since this is recursive enter
+        // 找到一个空闲的monitor(监控锁)或者一个已经分配该对象的monitor。
+        // (yunyao: 这里应该是因为有段时间没有人刷新注释，所有看上去很奇怪。
+        // 因为下方其实是尝试获取当前对象的偏向锁(轻量级锁)，而不是直接拿监控锁(重量级锁)
+        // 如果我们能够在函数的调用栈的寄存器中找到这个需要被加锁的对象的时候，就说明这是一个递归进入
+        // 我们就需要创建一个新的monitor。
         BasicObjectLock* limit = istate->monitor_base();
         BasicObjectLock* most_recent = (BasicObjectLock*) istate->stack_base();
         BasicObjectLock* entry = NULL;
+        // 以下这个循环就是从Lock Record中间找到是否有当前对象被锁定的记录
         while (most_recent != limit ) {
-          if (most_recent->obj() == NULL) entry = most_recent;
-          else if (most_recent->obj() == lockee) break;
+          if (most_recent->obj() == NULL) entry = most_recent; // 如果当前锁没有锁定的对象，继续迭代
+          else if (most_recent->obj() == lockee) break; // 如果已经有锁对象和当前被锁定的对象相同，则找到了一个已经被锁定过的记录
           most_recent++;
         }
+        // 遍历结束之后，entry可能为：
+        // 1. null(首次进入synchronizied)
+        // 2. entry->obj() == NULL(不是第一次进入，但是没有任何线程持有该锁）
         if (entry != NULL) {
+          // 开始操作这个选中的monitor
           entry->set_obj(lockee);
           int success = false;
           uintptr_t epoch_mask_in_place = markWord::epoch_mask_in_place;
 
+          // 获取对象头 mark word
           markWord mark = lockee->mark();
           intptr_t hash = (intptr_t) markWord::no_hash;
           // implies UseBiasedLocking
+          // 检查当前mark word中是否有偏向锁
           if (mark.has_bias_pattern()) {
             uintptr_t thread_ident;
             uintptr_t anticipated_bias_locking_value;
@@ -1806,24 +1822,29 @@ run:
 
             if  (anticipated_bias_locking_value == 0) {
               // already biased towards this thread, nothing to do
+              // 如果当前线程已经获取的偏向锁，不用做任何动作（但是会将当前锁的持有数+1）
               if (PrintBiasedLockingStatistics) {
                 (* BiasedLocking::biased_lock_entry_count_addr())++;
               }
               success = true;
             }
+            // 如果偏向锁不是偏向当前线程
             else if ((anticipated_bias_locking_value & markWord::biased_lock_mask_in_place) != 0) {
               // try revoke bias
+              // 尝试获取偏向锁
+              // 首先获取锁对象的mark word
               markWord header = lockee->klass()->prototype_header();
               if (hash != markWord::no_hash) {
                 header = header.copy_set_hash(hash);
               }
-              if (lockee->cas_set_mark(header, mark) == mark) {
+              if (lockee->cas_set_mark(header, mark) == mark) { // 使用CAS原子的将markWord设置到objectHead上
                 if (PrintBiasedLockingStatistics)
                   (*BiasedLocking::revoked_lock_entry_count_addr())++;
               }
             }
             else if ((anticipated_bias_locking_value & epoch_mask_in_place) !=0) {
               // try rebias
+              // 尝试重新获取偏向锁
               markWord new_header( (intptr_t) lockee->klass()->prototype_header().value() | thread_ident);
               if (hash != markWord::no_hash) {
                 new_header = new_header.copy_set_hash(hash);
@@ -1839,6 +1860,7 @@ run:
             }
             else {
               // try to bias towards thread in case object is anonymously biased
+              // 尝试让对象匿名偏向地偏向对锁定线程
               markWord header(mark.value() & (markWord::biased_lock_mask_in_place |
                                               markWord::age_mask_in_place |
                                               epoch_mask_in_place));
@@ -1860,12 +1882,14 @@ run:
           }
 
           // traditional lightweight locking
+          // 如果偏向锁失败，则回退到原始的轻量级锁（此时对应关闭UseBiasedLocking场景，或者偏向锁获取失败）
           if (!success) {
             markWord displaced = lockee->mark().set_unlocked();
             entry->lock()->set_displaced_header(displaced);
             bool call_vm = UseHeavyMonitors;
             if (call_vm || lockee->cas_set_mark(markWord::from_pointer(entry), displaced) != displaced) {
               // Is it simple recursive case?
+              // 看上去像是一个简单的递归
               if (!call_vm && THREAD->is_lock_owned((address) displaced.clear_lock_bits().to_pointer())) {
                 entry->lock()->set_displaced_header(markWord::from_pointer(NULL));
               } else {
@@ -1875,6 +1899,9 @@ run:
           }
           UPDATE_PC_AND_TOS_AND_CONTINUE(1, -1);
         } else {
+          // 如果找不到对应的监控锁，
+          // 则重新刷新标志位，创建一个新的monitor，
+          // 并且重新返回当前PC位置(pc+0)重新进行monitorenter指令执行
           istate->set_msg(more_monitors);
           UPDATE_PC_AND_RETURN(0); // Re-execute
         }
@@ -3209,6 +3236,7 @@ run:
 
     // Normal return
     // Advance the pc and return to frame manager
+    // pc自增，并且返回栈帧管理器
     UPDATE_PC_AND_RETURN(1);
   } /* handle_return: */
 
