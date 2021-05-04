@@ -99,7 +99,7 @@
 //    [JavaThread* | epoch | age | 1 | 01]       lock is biased toward given thread
 //                                               当锁偏向目标线程的时候（biased_lock为1）
 //    [0           | epoch | age | 1 | 01]       lock is anonymously biased
-//                                               当锁匿名偏向线程的时候（biased_lock为1）
+//                                               当锁匿名偏向线程的时候（线程指针为空，biased_lock为1）
 //
 //  - the two lock bits are used to describe three states: locked/unlocked and monitor.
 //  - 最后两比特用于表示表示三种状态：加锁/解锁以及监控锁

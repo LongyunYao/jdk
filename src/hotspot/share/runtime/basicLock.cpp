@@ -42,7 +42,7 @@ void BasicLock::move_to(oop obj, BasicLock* dest) {
   // does not matter, this inflation will just a no-op. For other cases,
   // the displaced header will be either 0x0 or 0x3, which are location
   // independent, therefore the BasicLock is free to move.
-  // 检查是否需要对锁进行膨胀。仅当使用“此”轻量级监控锁的时候才需要进行检查。
+  // 检查是否需要对锁进行膨胀。仅当使用“此”轻量级管程锁的时候才需要进行检查。
   // 在这中情况下，displaced_header()是unlocked/is_neutral，
   // 因为displaced_header()包含最初解锁的对象。然而锁可能已经膨胀了。但这并不重要，
   // 这种膨胀只是一个空话。在其他的情况下，被替换的对象头将是0x0或者0x3，它们与位置
@@ -56,7 +56,7 @@ void BasicLock::move_to(oop obj, BasicLock* dest) {
   // when the object is locked using "this" lightweight monitor.
   // 在OSR期间，我们可能需要将BasicLock（包含迁移信息的内容）从解释器框架中的位置
   // 重新定位到编译器框架中的新位置。“此”指代解释器框架中的源BasicLock。“目标”是指
-  // 编译器框架中的目标BasicLock。当时使用“此”轻量级监控器锁定对象的时候，我们总是
+  // 编译器框架中的目标BasicLock。当时使用“此”轻量级管程器锁定对象的时候，我们总是
   // 在move_to()方法中进行膨胀操作。
   //
   // The always-Inflate policy works properly, but it depends on the
